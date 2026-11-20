@@ -1657,16 +1657,19 @@
     if (!file) return;
     setImportError('');
 
+    importState.fileName = file.name;
+    importState.parsed = null;
+    els.importPreview.hidden = true;
+    updateImportPlan();
+    setImportDropState(file.name);
+
     if (file.size > MAX_IMPORT_BYTES) {
+      setImportDropState(file.name, '文件超过 2 MB，请重新选择');
       setImportError('文件太大，请选择 2 MB 以内的 CSV 文件');
       return;
     }
 
     const token = (importState.readToken += 1);
-    importState.fileName = file.name;
-    importState.parsed = null;
-    els.importPreview.hidden = true;
-    setImportDropState(file.name);
     setImportError('');
 
     let buffer;
