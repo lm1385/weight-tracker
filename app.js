@@ -8,6 +8,7 @@
 
   const STORAGE_KEY = 'qingji-weight:v1';
   const MAX_NOTE = 40;
+  const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
   const KG_MIN = 20;
   const KG_MAX = 300;
   const HEIGHT_MIN = 100;
@@ -24,6 +25,12 @@
     pendingConfirm: null,
     storageOk: true,
     chart: null,
+  };
+
+  const importState = {
+    parsed: null,
+    fileName: '',
+    readToken: 0,
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -75,7 +82,22 @@
     settingsError: $('#settings-error'),
     settingsCount: $('#settings-count'),
     settingsExportBtn: $('#settings-export-btn'),
+    settingsImportBtn: $('#settings-import-btn'),
     clearDataBtn: $('#clear-data-btn'),
+    importBtn: $('#import-btn'),
+    importDialog: $('#import-dialog'),
+    importFile: $('#import-file'),
+    importDrop: $('#import-drop'),
+    importDropTitle: $('#import-drop-title'),
+    importDropSub: $('#import-drop-sub'),
+    importError: $('#import-error'),
+    importPreview: $('#import-preview'),
+    importCount: $('#import-count'),
+    importRange: $('#import-range'),
+    importConflicts: $('#import-conflicts'),
+    importNotes: $('#import-notes'),
+    importPlan: $('#import-plan'),
+    importConfirm: $('#import-confirm'),
     confirmDialog: $('#confirm-dialog'),
     confirmTitle: $('#confirm-title'),
     confirmMessage: $('#confirm-message'),
@@ -137,6 +159,23 @@
     if (!isValidDateKey(key)) return '';
     const date = parseDateKey(key);
     return `${date.getMonth() + 1}月${date.getDate()}日 ${WEEKDAYS[date.getDay()]}`;
+  }
+
+  function monthDay(key) {
+    if (!isValidDateKey(key)) return '';
+    const date = parseDateKey(key);
+    return `${date.getMonth() + 1}月${date.getDate()}日`;
+  }
+
+  function dateRangeLabel(first, last) {
+    if (!isValidDateKey(first) || !isValidDateKey(last)) return '—';
+    if (first === last) return monthDay(first);
+    const firstDate = parseDateKey(first);
+    const lastDate = parseDateKey(last);
+    if (firstDate.getFullYear() === lastDate.getFullYear()) {
+      return `${monthDay(first)} – ${monthDay(last)}`;
+    }
+    return `${firstDate.getFullYear()}年${monthDay(first)} – ${lastDate.getFullYear()}年${monthDay(last)}`;
   }
 
   function monthLabel(key) {
@@ -1301,6 +1340,451 @@
     toast(`已导出 ${state.records.length} 条记录`);
   }
 
+  /* ---------------- CSV 导入 ---------------- */
+
+  function normalizeHeader(value) {
+    return String(value)
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '')
+      .replace(/[()（）\[\]【】]/g, '');
+  }
+
+  function findHeaderIndex(headers, candidates) {
+    const normalized = headers.map(normalizeHeader);
+    let index = normalized.findIndex((header) => candidates.includes(header));
+    if (index >= 0) return index;
+    return normalized.findIndex((header) => candidates.some((candidate) => header.includes(candidate)));
+  }
+
+  function detectDelimiter(text) {
+    const firstLine = text.split(/\r?\n/, 1)[0] || '';
+    const counts = { ',': 0, ';': 0, '\t': 0 };
+    let inQuotes = false;
+
+    for (const character of firstLine) {
+      if (character === '"') {
+        inQuotes = !inQuotes;
+      } else if (!inQuotes && Object.prototype.hasOwnProperty.call(counts, character)) {
+        counts[character] += 1;
+      }
+    }
+
+    let best = ',';
+    if (counts[';'] > counts[best]) best = ';';
+    if (counts['\t'] > counts[best]) best = '\t';
+    return counts[best] > 0 ? best : ',';
+  }
+
+  function parseDelimitedRows(text, delimiter) {
+    const rows = [];
+    let row = [];
+    let field = '';
+    let inQuotes = false;
+
+    for (let index = 0; index < text.length; index += 1) {
+      const character = text[index];
+
+      if (inQuotes) {
+        if (character === '"') {
+          if (text[index + 1] === '"') {
+            field += '"';
+            index += 1;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          field += character;
+        }
+      } else if (character === '"') {
+        inQuotes = true;
+      } else if (character === delimiter) {
+        row.push(field);
+        field = '';
+      } else if (character === '\n') {
+        row.push(field);
+        rows.push(row);
+        row = [];
+        field = '';
+      } else {
+        field += character;
+      }
+    }
+
+    if (field !== '' || row.length) {
+      row.push(field);
+      rows.push(row);
+    }
+
+    return rows;
+  }
+
+  function parseImportDate(raw) {
+    const text = String(raw ?? '').trim();
+    const match = text.match(
+      /^(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*日?(?:[ T].*)?$/
+    );
+    if (!match) return { error: '日期格式无法识别' };
+
+    const key = `${match[1]}-${pad2(Number(match[2]))}-${pad2(Number(match[3]))}`;
+    if (!isValidDateKey(key)) return { error: '日期无效' };
+    if (key > todayKey()) return { error: '日期不能晚于今天' };
+    return { key };
+  }
+
+  function parseImportWeight(raw) {
+    let text = String(raw ?? '')
+      .trim()
+      .replace(/\s+/g, '')
+      .replace(/kg|公斤|千克/gi, '');
+    if (!text) return { error: '体重为空' };
+    if (/^\d+,\d+$/.test(text)) text = text.replace(',', '.');
+
+    const weight = Number(text);
+    if (!Number.isFinite(weight)) return { error: '体重无法识别' };
+    if (weight < KG_MIN || weight > KG_MAX) {
+      return { error: `体重需在 ${KG_MIN} – ${KG_MAX} kg 之间` };
+    }
+    return { value: round1(weight) };
+  }
+
+  function parseImportText(text) {
+    const normalizedText = text
+      .replace(/^\uFEFF/, '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n');
+    if (!normalizedText.trim()) throw new Error('文件是空的，请选择包含记录的 CSV 文件');
+
+    const delimiter = detectDelimiter(normalizedText);
+    const rawRows = parseDelimitedRows(normalizedText, delimiter);
+    const rows = [];
+    rawRows.forEach((cells, index) => {
+      if (cells.some((cell) => String(cell).trim() !== '')) {
+        rows.push({ cells, line: index + 1 });
+      }
+    });
+    if (!rows.length) throw new Error('文件中没有可读取的内容');
+
+    const headers = rows[0].cells;
+    let dateIndex = findHeaderIndex(headers, ['日期', 'date', '时间', 'day']);
+    let weightIndex = findHeaderIndex(headers, ['体重kg', '体重', 'weightkg', 'weight', '重量', 'kg']);
+    let noteIndex = findHeaderIndex(headers, ['备注', 'note', 'notes', 'comment', 'comments', '说明']);
+    let dataStart = 1;
+
+    if (dateIndex < 0 || weightIndex < 0) {
+      const firstDate = parseImportDate(headers[0]);
+      const firstWeight = parseImportWeight(headers[1]);
+      if (firstDate.key && firstWeight.value != null) {
+        dateIndex = 0;
+        weightIndex = 1;
+        noteIndex = 2;
+        dataStart = 0;
+      } else {
+        throw new Error('未找到「日期」和「体重」列，请使用本应用导出的 CSV 格式');
+      }
+    }
+
+    const byDate = new Map();
+    const invalid = [];
+    let duplicateCount = 0;
+
+    for (let index = dataStart; index < rows.length; index += 1) {
+      const { cells, line } = rows[index];
+      const dateResult = parseImportDate(cells[dateIndex]);
+      if (!dateResult.key) {
+        invalid.push({ line, reason: dateResult.error });
+        continue;
+      }
+
+      const weightResult = parseImportWeight(cells[weightIndex]);
+      if (weightResult.value == null) {
+        invalid.push({ line, reason: weightResult.error });
+        continue;
+      }
+
+      const note = noteIndex >= 0 ? String(cells[noteIndex] ?? '').trim().slice(0, MAX_NOTE) : '';
+      if (byDate.has(dateResult.key)) duplicateCount += 1;
+      byDate.set(dateResult.key, {
+        date: dateResult.key,
+        weight: weightResult.value,
+        note,
+      });
+    }
+
+    if (!byDate.size) {
+      throw new Error('没有可导入的有效记录，请检查日期和体重格式');
+    }
+
+    return {
+      records: Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date)),
+      invalid,
+      duplicateCount,
+    };
+  }
+
+  function setImportError(message) {
+    els.importError.textContent = message || '';
+  }
+
+  function setImportDropState(fileName, subtitle) {
+    const loaded = Boolean(fileName);
+    els.importDrop.classList.toggle('is-loaded', loaded);
+    els.importDropTitle.textContent = loaded ? fileName : '点击选择或拖拽 CSV 文件';
+    els.importDropSub.textContent =
+      subtitle || (loaded ? '文件已读取，点击可重新选择' : '支持本应用导出的 CSV：日期,体重(kg),备注');
+  }
+
+  function getImportMode() {
+    const checked = els.importDialog.querySelector('input[name="import-mode"]:checked');
+    return checked ? checked.value : 'merge';
+  }
+
+  function updateImportPlan() {
+    const parsed = importState.parsed;
+    if (!parsed) {
+      els.importConfirm.disabled = true;
+      els.importConfirm.textContent = '导入数据';
+      els.importPlan.textContent = '';
+      els.importPlan.classList.remove('is-warning');
+      return;
+    }
+
+    const mode = getImportMode();
+    const existingDates = new Set(state.records.map((record) => record.date));
+    const conflictCount = parsed.records.filter((record) => existingDates.has(record.date)).length;
+    const addedCount = parsed.records.length - conflictCount;
+    let plan = '';
+    let label = '导入数据';
+    let disabled = false;
+    let warning = false;
+
+    if (mode === 'merge') {
+      if (addedCount > 0) {
+        plan = conflictCount
+          ? `将新增 ${addedCount} 条记录，跳过 ${conflictCount} 条同日期记录。`
+          : `将新增 ${addedCount} 条记录。`;
+        label = `导入 ${addedCount} 条`;
+      } else {
+        plan = '所有记录的日期都已存在。可以切换到「合并并覆盖同日期」或「替换全部记录」。';
+        label = '没有新记录';
+        disabled = true;
+        warning = true;
+      }
+    } else if (mode === 'overwrite') {
+      plan = conflictCount
+        ? `将新增 ${addedCount} 条，覆盖 ${conflictCount} 条同日期记录。`
+        : `将新增 ${addedCount} 条记录。`;
+      label = `导入 ${parsed.records.length} 条`;
+    } else {
+      plan = state.records.length
+        ? `将清空现有 ${state.records.length} 条记录，并导入 ${parsed.records.length} 条。`
+        : `将导入 ${parsed.records.length} 条记录。`;
+      label = '替换并导入';
+    }
+
+    els.importPlan.textContent = plan;
+    els.importPlan.classList.toggle('is-warning', warning);
+    els.importConfirm.disabled = disabled;
+    els.importConfirm.textContent = label;
+  }
+
+  function renderImportPreview() {
+    const parsed = importState.parsed;
+    if (!parsed) {
+      els.importPreview.hidden = true;
+      updateImportPlan();
+      return;
+    }
+
+    const count = parsed.records.length;
+    const first = parsed.records[0].date;
+    const last = parsed.records[count - 1].date;
+    const conflictCount = parsed.records.filter((record) => recordForDate(record.date)).length;
+
+    els.importPreview.hidden = false;
+    els.importCount.textContent = `${count} 条`;
+    els.importRange.textContent = dateRangeLabel(first, last);
+    els.importConflicts.textContent = `${conflictCount} 条`;
+
+    const notes = [];
+    if (parsed.invalid.length) {
+      const examples = parsed.invalid
+        .slice(0, 2)
+        .map((item) => `第 ${item.line} 行（${item.reason}）`)
+        .join('；');
+      notes.push(
+        `${parsed.invalid.length} 行格式有误将被跳过：${examples}${parsed.invalid.length > 2 ? ' 等' : ''}`
+      );
+    }
+    if (parsed.duplicateCount) {
+      notes.push(`文件内有 ${parsed.duplicateCount} 条同日期记录，已保留最后一条。`);
+    }
+
+    els.importNotes.hidden = notes.length === 0;
+    els.importNotes.textContent = notes.join('；');
+    updateImportPlan();
+  }
+
+  function resetImportState() {
+    importState.parsed = null;
+    importState.fileName = '';
+    importState.readToken += 1;
+    els.importFile.value = '';
+    els.importPreview.hidden = true;
+    els.importNotes.hidden = true;
+    els.importNotes.textContent = '';
+    els.importError.textContent = '';
+    els.importDrop.classList.remove('is-dragover');
+    setImportDropState('');
+    const mergeOption = els.importDialog.querySelector('input[name="import-mode"][value="merge"]');
+    if (mergeOption) mergeOption.checked = true;
+    updateImportPlan();
+  }
+
+  function openImportDialog() {
+    if (els.settingsDialog.open) els.settingsDialog.close();
+    if (els.importDialog.open) return;
+    resetImportState();
+    els.importDialog.showModal();
+    window.setTimeout(() => els.importDrop.focus(), 60);
+  }
+
+  function closeImportDialog() {
+    if (els.importDialog.open) els.importDialog.close();
+  }
+
+  async function handleImportFile(file) {
+    if (!file) return;
+    setImportError('');
+
+    if (file.size > MAX_IMPORT_BYTES) {
+      setImportError('文件太大，请选择 2 MB 以内的 CSV 文件');
+      return;
+    }
+
+    const token = (importState.readToken += 1);
+    importState.fileName = file.name;
+    importState.parsed = null;
+    els.importPreview.hidden = true;
+    setImportDropState(file.name);
+    setImportError('');
+
+    let buffer;
+    try {
+      buffer = await file.arrayBuffer();
+    } catch (error) {
+      if (token !== importState.readToken) return;
+      setImportDropState(file.name, '读取失败，请重新选择文件');
+      setImportError('无法读取该文件，请换一个文件重试');
+      return;
+    }
+    if (token !== importState.readToken) return;
+
+    let text;
+    try {
+      text = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+    } catch (error) {
+      try {
+        text = new TextDecoder('gbk').decode(buffer);
+      } catch (fallbackError) {
+        text = new TextDecoder('utf-8').decode(buffer);
+      }
+    }
+
+    try {
+      const parsed = parseImportText(text);
+      if (token !== importState.readToken) return;
+      importState.parsed = parsed;
+      setImportDropState(file.name, `已读取 ${parsed.records.length} 条有效记录，点击可重新选择`);
+      renderImportPreview();
+    } catch (error) {
+      if (token !== importState.readToken) return;
+      importState.parsed = null;
+      els.importPreview.hidden = true;
+      updateImportPlan();
+      setImportDropState(file.name, '解析失败，点击重新选择');
+      setImportError(error.message || '无法解析该 CSV 文件');
+    }
+  }
+
+  function applyImport(mode) {
+    const parsed = importState.parsed;
+    if (!parsed) return;
+
+    const now = Date.now();
+    const imported = parsed.records.map((record, index) => ({
+      ...record,
+      updatedAt: now + index,
+    }));
+
+    let added = 0;
+    let replaced = 0;
+    let skipped = 0;
+
+    if (mode === 'replace') {
+      state.records = imported;
+    } else {
+      const byDate = new Map(state.records.map((record) => [record.date, record]));
+      imported.forEach((record) => {
+        if (byDate.has(record.date)) {
+          if (mode === 'overwrite') {
+            byDate.set(record.date, record);
+            replaced += 1;
+          } else {
+            skipped += 1;
+          }
+        } else {
+          byDate.set(record.date, record);
+          added += 1;
+        }
+      });
+      state.records = Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+    }
+
+    const saved = persist();
+    state.range = chooseInitialRange();
+    syncRangeButtons();
+    resetEditing();
+    els.weightInput.value = '';
+    els.noteInput.value = '';
+    els.dateInput.value = todayKey();
+    clearFormError();
+    renderAll();
+    closeImportDialog();
+
+    let message;
+    if (mode === 'replace') {
+      message = `已用 ${imported.length} 条记录替换原有数据`;
+    } else {
+      const parts = [`新增 ${added} 条`];
+      if (replaced) parts.push(`覆盖 ${replaced} 条`);
+      if (skipped) parts.push(`跳过 ${skipped} 条`);
+      message = `已导入 ${imported.length} 条：${parts.join('，')}`;
+    }
+    if (parsed.invalid.length) {
+      message += `，另有 ${parsed.invalid.length} 行格式有误未导入`;
+    }
+    toast(saved ? message : `${message}；浏览器存储不可用，刷新后会丢失`);
+  }
+
+  function handleImportConfirm() {
+    const parsed = importState.parsed;
+    if (!parsed) return;
+    const mode = getImportMode();
+
+    if (mode === 'replace' && state.records.length) {
+      openConfirm({
+        title: '替换全部记录？',
+        message: `将删除现有 ${state.records.length} 条记录，并用导入的 ${parsed.records.length} 条记录替换，此操作无法撤销。`,
+        confirmText: '替换并导入',
+        onConfirm: () => applyImport('replace'),
+      });
+      return;
+    }
+
+    applyImport(mode);
+  }
+
   /* ---------------- Toast ---------------- */
 
   let toastTimer = 0;
@@ -1347,8 +1831,51 @@
     els.exportBtn.addEventListener('click', exportCsv);
     els.footerExportBtn.addEventListener('click', exportCsv);
     els.settingsExportBtn.addEventListener('click', exportCsv);
+    els.importBtn.addEventListener('click', openImportDialog);
+    els.settingsImportBtn.addEventListener('click', openImportDialog);
     els.clearDataBtn.addEventListener('click', askClearAll);
     els.settingsForm.addEventListener('submit', handleSettingsSubmit);
+
+    els.importDrop.addEventListener('click', () => els.importFile.click());
+    els.importFile.addEventListener('change', (event) => {
+      const file = event.target.files && event.target.files[0];
+      if (file) handleImportFile(file);
+      event.target.value = '';
+    });
+
+    ['dragenter', 'dragover'].forEach((type) => {
+      els.importDrop.addEventListener(type, (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+        els.importDrop.classList.add('is-dragover');
+      });
+    });
+    ['dragleave', 'drop'].forEach((type) => {
+      els.importDrop.addEventListener(type, () => {
+        els.importDrop.classList.remove('is-dragover');
+      });
+    });
+    els.importDrop.addEventListener('drop', (event) => {
+      event.preventDefault();
+      const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+      if (file) handleImportFile(file);
+    });
+    els.importDialog.addEventListener('dragover', (event) => event.preventDefault());
+    els.importDialog.addEventListener('drop', (event) => {
+      if (!event.target.closest('#import-drop')) event.preventDefault();
+    });
+
+    els.importDialog.querySelectorAll('input[name="import-mode"]').forEach((input) => {
+      input.addEventListener('change', updateImportPlan);
+    });
+    els.importConfirm.addEventListener('click', handleImportConfirm);
+    els.importDialog.addEventListener('click', (event) => {
+      if (event.target === els.importDialog || event.target.closest('[data-close-import]')) {
+        closeImportDialog();
+      }
+    });
+    els.importDialog.addEventListener('close', resetImportState);
 
     [els.heightInput, els.targetInput].forEach((input) => {
       input.addEventListener('input', () => {
