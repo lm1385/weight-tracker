@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0e5e4d">
+  <meta name="description" content="轻记体重：每天记录体重，查看趋势、BMI 和目标进度。所有数据仅保存在你的浏览器本地。">
+  <title>轻记体重 · 每天一个数字，看见点滴改变</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23147a64'/%3E%3Cpath d='M47 13C32 13 22 21.5 22 35.5c14 0 22.5-9.5 25-22.5Z' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linejoin='round'/%3E%3Cpath d='M22 36.5C25.8 28.6 32 22.4 40 18.5' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="page-bg" aria-hidden="true">
+    <span class="blob blob-a"></span>
+    <span class="blob blob-b"></span>
+    <span class="blob blob-c"></span>
+    <span class="grain"></span>
+  </div>
+
+  <div class="app">
+    <header class="topbar">
+      <a class="brand" href="./index.html" aria-label="轻记体重首页">
+        <span class="brand-mark">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-leaf"></use></svg>
+        </span>
+        <span class="brand-text">
+          <span class="brand-name">轻记体重</span>
+          <span class="brand-slogan">每天一个数字，看见点滴改变</span>
+        </span>
+      </a>
+      <div class="topbar-right">
+        <span class="today-chip">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-calendar"></use></svg>
+          <span id="today-text">今天</span>
+        </span>
+        <button class="icon-btn" id="settings-btn" type="button" aria-label="打开设置" title="设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-settings"></use></svg>
+        </button>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero" aria-label="今日记录与目标">
+        <article class="card entry-card" id="entry-card" aria-labelledby="entry-title">
+          <div class="entry-head">
+            <div>
+              <p class="eyebrow"><span class="pulse-dot" aria-hidden="true"></span><span id="entry-eyebrow">今日记录</span></p>
+              <h2 id="entry-title">今天称重了吗？</h2>
+            </div>
+            <div class="today-status" id="today-status" role="status" aria-live="polite">
+              <span class="status-dot" aria-hidden="true"></span>
+              <span id="today-status-text">今天还未记录</span>
+            </div>
+          </div>
+
+          <form id="entry-form" novalidate>
+            <div class="weight-input-row">
+              <div class="weight-input-wrap">
+                <label class="sr-only" for="weight-input">体重，单位公斤</label>
+                <input id="weight-input" name="weight" type="number" inputmode="decimal"
+                       step="0.1" min="20" max="300" placeholder="00.0" autocomplete="off"
+                       aria-describedby="form-hint">
+                <span class="weight-unit">kg</span>
+              </div>
+              <button class="primary-btn" type="submit" id="submit-btn">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-plus"></use></svg>
+                <span id="submit-text">记录体重</span>
+              </button>
+            </div>
+            <p class="field-error" id="form-error" role="alert"></p>
+
+            <div class="meta-fields">
+              <label class="field date-field" for="date-input">
+                <span class="field-label">日期</span>
+                <span class="input-shell">
+                  <input type="date" id="date-input" name="date">
+                </span>
+              </label>
+              <label class="field note-field" for="note-input">
+                <span class="field-label">备注 <span class="optional">可选</span></span>
+                <span class="input-shell">
+                  <input type="text" id="note-input" name="note" maxlength="40"
+                         placeholder="如：晨起空腹 / 运动后">
+                </span>
+              </label>
+            </div>
+
+            <div class="form-foot">
+              <p class="form-hint" id="form-hint">支持补记历史数据；同一天再次记录会覆盖当天数据。</p>
+              <button class="text-btn hidden" id="cancel-edit" type="button">取消编辑</button>
+            </div>
+          </form>
+        </article>
+
+        <aside class="card goal-card" aria-labelledby="goal-title">
+          <div class="goal-top">
+            <div>
+              <p class="eyebrow eyebrow-light">目标进度</p>
+              <h2 id="goal-title">向目标靠近</h2>
+            </div>
+            <button class="icon-btn icon-btn-light" id="goal-settings-btn" type="button"
+                    aria-label="设置目标与身高" title="设置目标">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-edit"></use></svg>
+            </button>
+          </div>
+
+          <div class="goal-main">
+            <div class="ring-wrap">
+              <svg class="ring" viewBox="0 0 120 120" aria-hidden="true">
+                <circle class="ring-track" cx="60" cy="60" r="52"></circle>
+                <circle class="ring-fill" id="ring-fill" cx="60" cy="60" r="52"></circle>
+              </svg>
+              <div class="ring-label">
+                <strong id="goal-percent">—</strong>
+                <span id="goal-ring-label">目标进度</span>
+              </div>
+            </div>
+            <div class="goal-copy">
+              <p class="goal-headline" id="goal-headline">设置目标体重</p>
+              <p class="goal-desc" id="goal-desc">有方向，改变更容易坚持</p>
+              <div class="goal-meta" id="goal-meta"></div>
+            </div>
+          </div>
+
+          <div class="goal-foot" id="goal-foot"></div>
+        </aside>
+      </section>
+
+      <section class="stats" id="stats-grid" aria-label="体重概览"></section>
+
+      <section class="card chart-card" aria-labelledby="chart-title">
+        <div class="card-head">
+          <div>
+            <p class="eyebrow">趋势</p>
+            <h2 id="chart-title">体重变化曲线</h2>
+          </div>
+          <div class="segmented" id="range-switch" role="group" aria-label="趋势时间范围">
+            <button type="button" data-range="7">7 天</button>
+            <button type="button" data-range="30" class="active" aria-pressed="true">30 天</button>
+            <button type="button" data-range="all">全部</button>
+          </div>
+        </div>
+
+        <div class="chart-legend">
+          <span class="legend-item"><i class="legend-line" aria-hidden="true"></i>体重</span>
+          <span class="legend-item"><i class="legend-dash" aria-hidden="true"></i>平均 <span id="chart-average">—</span></span>
+          <span class="legend-summary" id="chart-summary"></span>
+        </div>
+
+        <div class="chart-wrap" id="chart-wrap">
+          <svg id="chart" role="img" aria-label="体重趋势折线图"></svg>
+          <div class="chart-tooltip" id="chart-tooltip" hidden></div>
+          <div class="chart-empty" id="chart-empty" hidden>
+            <span class="chart-empty-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><use href="#i-chart"></use></svg>
+            </span>
+            <p id="chart-empty-title">这段时间还没有记录</p>
+            <span>记录今天的体重，曲线就会从这里开始。</span>
+            <button class="ghost-btn" type="button" data-action="focus-entry">去记录</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card history-card" aria-labelledby="history-title">
+        <div class="card-head">
+          <div>
+            <p class="eyebrow">明细</p>
+            <h2 id="history-title">历史记录 <span class="count-pill" id="history-count">0 条</span></h2>
+          </div>
+          <button class="ghost-btn" id="export-btn" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"></use></svg>
+            导出 CSV
+          </button>
+        </div>
+        <div class="history-scroll">
+          <ul class="history-list" id="history-list"></ul>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-lock"></use></svg>
+        数据仅保存在本机浏览器，不会上传 ——
+        <button class="footer-link" id="footer-export-btn" type="button">随时导出备份</button>
+      </p>
+    </footer>
+  </div>
+
+  <!-- 设置弹窗 -->
+  <dialog class="modal" id="settings-dialog" aria-labelledby="settings-title">
+    <form id="settings-form" novalidate>
+      <header class="modal-head">
+        <div>
+          <p class="eyebrow">个人设置</p>
+          <h2 id="settings-title">身体信息与数据</h2>
+        </div>
+        <button class="icon-btn" type="button" data-close aria-label="关闭设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-close"></use></svg>
+        </button>
+      </header>
+      <div class="modal-body">
+        <section class="settings-section">
+          <h3>身体信息</h3>
+          <div class="form-grid">
+            <label class="field" for="height-input">
+              <span class="field-label">身高 <span class="optional">cm，可选</span></span>
+              <span class="input-shell">
+                <input id="height-input" type="number" inputmode="decimal" min="100" max="250"
+                       step="0.1" placeholder="例如 168">
+              </span>
+            </label>
+            <label class="field" for="target-input">
+              <span class="field-label">目标体重 <span class="optional">kg，可选</span></span>
+              <span class="input-shell">
+                <input id="target-input" type="number" inputmode="decimal" min="20" max="300"
+                       step="0.1" placeholder="例如 58">
+              </span>
+            </label>
+          </div>
+          <p class="hint">身高用于计算 BMI；目标体重用于计算目标进度，起始体重取第一条记录。</p>
+          <p class="field-error" id="settings-error" role="alert"></p>
+        </section>
+
+        <section class="settings-section">
+          <h3>数据管理</h3>
+          <p class="hint">当前共有 <strong id="settings-count">0</strong> 条体重记录，全部保存在本机浏览器中。</p>
+          <div class="button-row">
+            <button class="ghost-btn" type="button" id="settings-export-btn">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-download"></use></svg>
+              导出 CSV
+            </button>
+            <button class="ghost-btn danger-btn" type="button" id="clear-data-btn">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-trash"></use></svg>
+              清空所有记录
+            </button>
+          </div>
+        </section>
+      </div>
+      <footer class="modal-foot">
+        <button class="ghost-btn" type="button" data-close>取消</button>
+        <button class="primary-btn" type="submit">保存设置</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- 确认弹窗 -->
+  <dialog class="modal modal-sm" id="confirm-dialog" aria-labelledby="confirm-title">
+    <div class="confirm-body">
+      <span class="confirm-icon" aria-hidden="true">!</span>
+      <h2 id="confirm-title">删除记录？</h2>
+      <p id="confirm-message">删除后无法恢复。</p>
+    </div>
+    <footer class="modal-foot">
+      <button class="ghost-btn" type="button" id="confirm-cancel">取消</button>
+      <button class="danger-solid-btn" type="button" id="confirm-ok">删除</button>
+    </footer>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <!-- 图标 -->
+  <svg class="svg-sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-scale" viewBox="0 0 24 24">
+      <rect x="4" y="3" width="16" height="18" rx="4"></rect>
+      <path d="M8 8h8"></path>
+      <circle cx="12" cy="14" r="2.4"></circle>
+    </symbol>
+    <symbol id="i-leaf" viewBox="0 0 24 24">
+      <path d="M20 4C11 4 4.8 9.4 4.8 18.3c8.9 0 14.3-6.2 15.2-14.3Z"></path>
+      <path d="M4.8 18.8C7.2 13.8 11.2 9.8 16 7.4"></path>
+    </symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24">
+      <rect x="3.5" y="5" width="17" height="16" rx="3"></rect>
+      <path d="M8 3v4M16 3v4M3.5 10h17"></path>
+    </symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24">
+      <path d="M4 7h9M17 7h3M4 17h3M11 17h9"></path>
+      <circle cx="15" cy="7" r="2.2"></circle>
+      <circle cx="9" cy="17" r="2.2"></circle>
+    </symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24">
+      <path d="M4 20h4.2L19 9.2 14.8 5 4 15.8V20Z"></path>
+      <path d="m13.5 6.3 4.2 4.2"></path>
+    </symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24">
+      <path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v5.5M14 11v5.5"></path>
+    </symbol>
+    <symbol id="i-download" viewBox="0 0 24 24">
+      <path d="M12 3v12M7.5 10.5 12 15l4.5-4.5M4.5 19.5h15"></path>
+    </symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24">
+      <path d="M12 5v14M5 12h14"></path>
+    </symbol>
+    <symbol id="i-close" viewBox="0 0 24 24">
+      <path d="m6 6 12 12M18 6 6 18"></path>
+    </symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24">
+      <path d="M4 19V5M4 19h16"></path>
+      <path d="m7 15 4-4 3.5 2.5L20 7"></path>
+    </symbol>
+    <symbol id="i-trend" viewBox="0 0 24 24">
+      <path d="M4 16.5 9.5 11l3.5 3.5L20 7.5"></path>
+      <path d="M15.5 7.5H20V12"></path>
+    </symbol>
+    <symbol id="i-weight" viewBox="0 0 24 24">
+      <path d="M6.5 6h11l2.3 13.5H4.2L6.5 6Z"></path>
+      <path d="M9 6a3 3 0 0 1 6 0"></path>
+    </symbol>
+    <symbol id="i-flame" viewBox="0 0 24 24">
+      <path d="M12.2 3.5c.4 3.4-2.2 4.4-3.4 6.5-1 1.8-.6 3.2.3 4 .4-1.4 1.2-2.3 2.1-2.8-.1 2 .9 3.1 2.3 3.1 1.6 0 2.5-1.2 2.5-2.6 0-1.5-.8-2.6-1.6-3.4"></path>
+      <path d="M6.8 12.2a6 6 0 1 0 10.4 4.1c0-2.4-1.2-4.6-2.9-6.1"></path>
+    </symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24">
+      <rect x="5" y="10.5" width="14" height="10" rx="3"></rect>
+      <path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"></path>
+    </symbol>
+    <symbol id="i-target" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8.5"></circle>
+      <circle cx="12" cy="12" r="4.5"></circle>
+      <circle cx="12" cy="12" r="1"></circle>
+    </symbol>
+    <symbol id="i-arrow-down" viewBox="0 0 24 24">
+      <path d="M12 4v15M6.5 13.5 12 19l5.5-5.5"></path>
+    </symbol>
+    <symbol id="i-arrow-up" viewBox="0 0 24 24">
+      <path d="M12 20V5M6.5 10.5 12 5l5.5 5.5"></path>
+    </symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24">
+      <path d="M5 12h14"></path>
+    </symbol>
+  </svg>
+
+  <script src="app.js"></script>
+</body>
+</html>
